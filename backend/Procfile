@@ -1,0 +1,4 @@
+# Render/Heroku — تشغيل النسخة المبنية مع توليد Prisma client
+build: npm ci && npx prisma generate && npm run build
+release: npx prisma migrate deploy
+start: npm run start:prod
