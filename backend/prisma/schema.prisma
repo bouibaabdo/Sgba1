@@ -1,0 +1,327 @@
+// SGBA-ERP — مخطط Prisma
+// المرحلة 1: RBAC + المحاكم المغربية + حقول الأرشفة المادية (هيكل أولي للملفات)
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ═══════════════════ 1) الأدوار والصلاحيات ═══════════════════
+
+enum PermissionAction {
+  CREATE
+  READ
+  UPDATE
+  DELETE
+  EXPORT
+  ASSIGN
+  ARCHIVE
+}
+
+// النطاق تراكمي: OWN ⊂ ASSIGNED ⊂ ALL
+enum PermissionScope {
+  OWN
+  ASSIGNED
+  ALL
+}
+
+model Role {
+  id       Int     @id @default(autoincrement())
+  code     String  @unique
+  nameAr   String
+  nameFr   String
+  isSystem Boolean @default(false)
+  isActive Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  users       User[]
+  permissions RolePermission[]
+
+  @@map("roles")
+}
+
+model Permission {
+  id         Int    @id @default(autoincrement())
+  resource   String
+  action     String
+  scope      String
+  scopeLevel Int // 1=OWN, 2=ASSIGNED, 3=ALL (للمقارنة الرقمية في SQL لاحقًا)
+
+  roles RolePermission[]
+
+  @@unique([resource, action, scope])
+  @@map("permissions")
+}
+
+model RolePermission {
+  roleId       Int
+  permissionId Int
+
+  role       Role       @relation(fields: [roleId], references: [id], onDelete: Cascade)
+  permission Permission @relation(fields: [permissionId], references: [id], onDelete: Cascade)
+
+  @@id([roleId, permissionId])
+  @@index([permissionId])
+  @@map("role_permissions")
+}
+
+model User {
+  id           Int       @id @default(autoincrement())
+  fullName     String
+  email        String    @unique
+  passwordHash String
+  phone        String?
+  barNumber    String? // رقم التسجيل بهيئة المحامين (للمحامين)
+  isActive     Boolean   @default(true)
+  isLawyer     Boolean   @default(false) // يظهر في قوائم إسناد الملفات
+  roleId       Int
+
+  lastLoginAt DateTime?
+  createdAt   DateTime  @default(now())
+  updatedAt   DateTime  @updatedAt
+
+  role          Role           @relation(fields: [roleId], references: [id])
+  leadCases     Case[]         @relation("CaseLeadLawyer")
+  assignedTasks Task[]         @relation("TaskAssignee")
+  createdTasks  Task[]         @relation("TaskCreator")
+  hearings      Hearing[]      @relation("HearingLawyer")
+  auditLogs     AuditLog[]
+  refreshTokens RefreshToken[]
+
+  @@map("users")
+}
+
+model RefreshToken {
+  id        String    @id @default(cuid())
+  tokenHash String    @unique // يُخزَّن مشفَّرًا (sha256) لا كنص صريح
+  userId    Int
+  expiresAt DateTime
+  revokedAt DateTime?
+  createdAt DateTime  @default(now())
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
+  @@map("refresh_tokens")
+}
+
+// ═══════════════════ 2) المحاكم المغربية ═══════════════════
+
+enum CourtType {
+  CASSATION // محكمة النقض
+  APPEAL // محكمة استئناف
+  FIRST_INSTANCE // محكمة ابتدائية
+  COMMERCIAL_FIRST // المحكمة التجارية
+  COMMERCIAL_APPEAL // محكمة تجارية استئناف
+  ADMINISTRATIVE // المحكمة الإدارية
+  ADMINISTRATIVE_APPEAL // محكمة إدارية استئناف
+}
+
+model Court {
+  id       Int       @id @default(autoincrement())
+  code     String    @unique
+  nameAr   String
+  nameFr   String
+  type     CourtType
+  cityAr   String
+  cityFr   String
+  isActive Boolean   @default(true)
+
+  parentId Int?
+  parent   Court?  @relation("court_hierarchy", fields: [parentId], references: [id])
+  children Court[] @relation("court_hierarchy")
+
+  cases    Case[]
+  hearings Hearing[]
+
+  @@index([type])
+  @@index([cityAr])
+  @@map("courts")
+}
+
+// ═══════════════════ 3) الملفات (هيكل أولي — يكتمل في المرحلة 3) ═══════════════════
+
+enum CaseType {
+  CIVIL // مدني
+  PENAL // جنائي
+  COMMERCIAL // تجاري
+  SOCIAL // اجتماعي (شغل)
+  ADMINISTRATIVE // إداري
+}
+
+enum CaseStatus {
+  OPEN // مفتوح
+  IN_PROGRESS // قيد المتابعة
+  DELIBERATION // مداولة
+  JUDGMENT_RENDERED // صدر الحكم
+  CLOSED // مغلق
+  ARCHIVED // مؤرشف
+}
+
+model Client {
+  id         Int      @id @default(autoincrement())
+  kind       String   @default("PERSON") // PERSON | COMPANY
+  fullNameAr String
+  fullNameFr String?
+  phone      String?
+  email      String?
+  address    String?
+  cin        String? // البطاقة الوطنية للأشخاص
+  ice        String? // المعرّف الموحد للمقاولة (الشركات)
+  notes      String?
+  isActive   Boolean  @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  cases Case[]
+
+  @@index([fullNameAr])
+  @@map("clients")
+}
+
+// أطراف الدعوى: الزبناء، الأطراف المقابلة، الزملاء المحامون (Confrères)، القضاة
+model Contact {
+  id        Int      @id @default(autoincrement())
+  kind      String   @default("OPPOSING_PARTY") // CLIENT|OPPOSING_PARTY|CONFRERE|JUDGE
+  fullNameAr String
+  fullNameFr String?
+  function  String? // للقضاة: رئيس الغرفة، مستشار... وللزملاء: هيئة المحاماة
+  phone     String?
+  email     String?
+  address   String?
+  barNumber String? // رقم القيد بالهيئة (للمحامين)
+  notes     String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  caseLinks CaseContact[]
+
+  @@index([kind])
+  @@map("contacts")
+}
+
+model Case {
+  id           Int        @id @default(autoincrement())
+  internalRef  String     @unique // المرجع الداخلي للمكتب
+  courtRef     String? // رقم القيد لدى المحكمة
+  title        String
+  type         CaseType
+  status       CaseStatus @default(OPEN)
+  clientId     Int
+  courtId      Int?
+  leadLawyerId Int?
+
+  openedAt DateTime  @default(now())
+  closedAt DateTime?
+
+  // ── الأرشفة المادية: أين يوجد الملف الورقي في المكتب ──
+  archiveCabinet String? // رقم الخزانة
+  archiveShelf   String? // رقم الرف
+  archiveBox     String? // رقم العلبة
+  archiveNotes   String? // ملاحظات (مثلاً: "الجزء الثاني لدى المحاسب")
+  archivedAt     DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  client     Client @relation(fields: [clientId], references: [id])
+  court      Court? @relation(fields: [courtId], references: [id])
+  leadLawyer User?  @relation("CaseLeadLawyer", fields: [leadLawyerId], references: [id])
+
+  tasks     Task[]
+  hearings  Hearing[]
+  opposingContacts CaseContact[]
+
+  @@index([status])
+  @@index([type])
+  @@index([archiveCabinet, archiveShelf, archiveBox])
+  @@map("cases")
+}
+
+// علاقة كثير-لكثير: أطراف الدعوى المرتبطة بملف (الطرف المقابل، الزميل، القاضي)
+model CaseContact {
+  caseId    Int
+  contactId Int
+  role      String @default("OPPOSING_PARTY") // دور هذا الطرف في هذا الملف تحديدًا
+
+  case    Case    @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  contact Contact @relation(fields: [contactId], references: [id], onDelete: Cascade)
+
+  @@id([caseId, contactId])
+  @@map("case_contacts")
+}
+
+model Hearing {
+  id         Int        @id @default(autoincrement())
+  caseId     Int
+  scheduledAt DateTime  // تاريخ ووقت الجلسة
+  room       String?    // رقم/اسم القاعة
+  courtId    Int?       // محكمة الجلسة (قد تختلف عن محكمة الملف عند التحويل)
+  purpose    String?    // الغرض من الجلسة (دفاع، تصريح، تمثيل...)
+  decision   String?    // مقرر/قرار الجلسة بعد انعقادها
+  nextStep   String?    // الإجراء الموالي بعد الجلسة
+  status     String     @default("SCHEDULED") // SCHEDULED|HELD|POSTPONED|CANCELLED
+  lawyerId   Int?       // المحامي المكلف بالحضور
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  case   Case @relation(fields: [caseId], references: [id], onDelete: Cascade)
+  court  Court? @relation(fields: [courtId], references: [id])
+  lawyer User?  @relation("HearingLawyer", fields: [lawyerId], references: [id])
+
+  @@index([scheduledAt])
+  @@index([status])
+  @@map("hearings")
+}
+
+model Task {
+  id          Int       @id @default(autoincrement())
+  title       String
+  description String?
+  dueDate     DateTime?
+  isDone      Boolean   @default(false)
+  doneAt      DateTime?
+
+  caseId     Int?
+  assigneeId Int?
+  creatorId  Int?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  case     Case? @relation(fields: [caseId], references: [id])
+  assignee User? @relation("TaskAssignee", fields: [assigneeId], references: [id])
+  creator  User? @relation("TaskCreator", fields: [creatorId], references: [id])
+
+  @@index([assigneeId, isDone])
+  @@map("tasks")
+}
+
+// ═══════════════════ 4) سجل التدقيق ═══════════════════
+
+model AuditLog {
+  id         BigInt   @id @default(autoincrement())
+  userId     Int?
+  action     String // مثال: CASE_STATUS_CHANGE, HEARING_CREATE
+  resource   String
+  resourceId String?
+  ip         String?
+  meta       Json?
+
+  createdAt DateTime @default(now())
+
+  user User? @relation(fields: [userId], references: [id])
+
+  @@index([resource, resourceId])
+  @@index([userId])
+  @@map("audit_logs")
+}

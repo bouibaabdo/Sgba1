@@ -1,0 +1,5 @@
+/* SGBA-ERP — أنماط عامة (Ant Design يتكفل بالتصميم الأساسي) */
+body {
+  margin: 0;
+  font-family: 'Cairo', 'Open Sans', -apple-system, 'Segoe UI', sans-serif;
+}

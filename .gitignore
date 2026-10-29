@@ -1,0 +1,15 @@
+# Dependencies
+**/node_modules/
+
+# Build output and caches
+/backend/dist/
+/web/.next/
+/web/out/
+**/coverage/
+**/*.tsbuildinfo
+
+# Local environment files
+**/.env
+**/.env.*
+!**/.env.example
+!**/.env.*.example

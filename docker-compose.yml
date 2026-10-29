@@ -1,0 +1,22 @@
+# PostgreSQL للمكتب — يشغَّل بـ: docker compose up -d
+services:
+  db:
+    image: postgres:16-alpine
+    container_name: sgba-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: sgba
+      POSTGRES_PASSWORD: sgba
+      POSTGRES_DB: sgba
+    ports:
+      - "5432:5432"
+    volumes:
+      - sgba-pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sgba"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+volumes:
+  sgba-pgdata:
